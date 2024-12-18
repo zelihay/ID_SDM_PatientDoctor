@@ -53,48 +53,48 @@ def create_patient_model():
 
 
     # CPT for SideEffects given Treatment, Age, and Smoking
-    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 0, 'Smoking': 0}] = [0.45, 0.55]
+    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 0, 'Smoking': 0}] = [0.45, 0.55]
     # Treatment = RAI, Age = 30-39, Smoking = Yes
-    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 0, 'Smoking': 1}] = [0.30, 0.70]
+    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 0, 'Smoking': 1}] = [0.30, 0.70]
     # Treatment = RAI, Age = 40-49, Smoking = No
-    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 1, 'Smoking': 0}] = [0.35, 0.65]
+    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 1, 'Smoking': 0}] = [0.35, 0.65]
     # Treatment = RAI, Age = 40-49, Smoking = Yes
-    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 1, 'Smoking': 1}] = [0.20, 0.80]
+    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 1, 'Smoking': 1}] = [0.20, 0.80]
     # Treatment = RAI, Age = 50+, Smoking = No
-    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 2, 'Smoking': 0}] = [0.25, 0.75]
+    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 2, 'Smoking': 0}] = [0.25, 0.75]
     # Treatment = RAI, Age = 50+, Smoking = Yes
-    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 2, 'Smoking': 1}] = [0.10, 0.90]
+    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 2, 'Smoking': 1}] = [0.10, 0.90]
     
     # Treatment = RAI, Age = 30-39, Smoking = No
 
-    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 0, 'Smoking': 0}] = [0.90, 0.10]
+    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 0, 'Smoking': 0}] = [0.90, 0.10]
     # Treatment = ATD, Age = 30-39, Smoking = Yes
-    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 0, 'Smoking': 1}] = [0.80, 0.20]
+    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 0, 'Smoking': 1}] = [0.80, 0.20]
     # Treatment = ATD, Age = 40-49, Smoking = No
-    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 1, 'Smoking': 0}] = [0.85, 0.15]
+    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 1, 'Smoking': 0}] = [0.85, 0.15]
     # Treatment = ATD, Age = 40-49, Smoking = Yes
-    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 1, 'Smoking': 1}] = [0.75, 0.25]
+    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 1, 'Smoking': 1}] = [0.75, 0.25]
     # Treatment = ATD, Age = 50+, Smoking = No
-    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 2, 'Smoking': 0}] = [0.80, 0.20]
+    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 2, 'Smoking': 0}] = [0.80, 0.20]
     # Treatment = ATD, Age = 50+, Smoking = Yes
-    patient_model.cpt(side_effects)[{'Treatment': 1, 'Age': 2, 'Smoking': 1}] = [0.70, 0.30]
+    patient_model.cpt(side_effects)[{'Treatment': 0, 'Age': 2, 'Smoking': 1}] = [0.70, 0.30]
 
     # CPT for Lifelong_Thyroid_Replacement given Treatment
     patient_model.cpt(lifelong_thyroid_replacement)[{'Treatment': 0}] = [0.70, 0.30]  # ATD
     patient_model.cpt(lifelong_thyroid_replacement)[{'Treatment': 1}] = [0.15, 0.85]  # RAI
 
     # CPT for Remission based on Treatment
-    patient_model.cpt(remission)[{'Treatment': 0}] = [0.60, 0.40]  # ATD
-    patient_model.cpt(remission)[{'Treatment': 1}] = [0.20, 0.80]  # RAI
+    patient_model.cpt(remission)[{'Treatment': 1}] = [0.60, 0.40]  # 
+    patient_model.cpt(remission)[{'Treatment': 0}] = [0.20, 0.80]  # 
 
     # CPT for Hypothyroidism based on Treatment and Goiter Size
-    patient_model.cpt(hypothyroidism)[{'Treatment': 0, 'GoiterSize': 0}] = [0.15, 0.75]  # ATD, Small Goiter
-    patient_model.cpt(hypothyroidism)[{'Treatment': 0, 'GoiterSize': 1}] = [0.75, 0.25]  # ATD, Large Goiter
-    patient_model.cpt(hypothyroidism)[{'Treatment': 1, 'GoiterSize': 0}] = [0.90, 0.10]  # RAI, Small Goiter
-    patient_model.cpt(hypothyroidism)[{'Treatment': 1, 'GoiterSize': 1}] = [0.85, 0.15]  # RAI, Large Goiter
+    patient_model.cpt(hypothyroidism)[{'Treatment': 1, 'GoiterSize': 0}] = [0.15, 0.75]  # ATD, Small Goiter
+    patient_model.cpt(hypothyroidism)[{'Treatment': 1, 'GoiterSize': 1}] = [0.75, 0.25]  # ATD, Large Goiter
+    patient_model.cpt(hypothyroidism)[{'Treatment': 0, 'GoiterSize': 0}] = [0.90, 0.10]  # RAI, Small Goiter
+    patient_model.cpt(hypothyroidism)[{'Treatment': 0, 'GoiterSize': 1}] = [0.85, 0.15]  # RAI, Large Goiter
 
     # CPT for Cost based on Treatment
-    patient_model.cpt(cost)[{'Treatment': 0}] = [0.40, 0.50, 0.10]  # ATD: Low 40%, Medium 50%, High 10%
-    patient_model.cpt(cost)[{'Treatment': 1}] = [0.20, 0.60, 0.20]  # RAI: Low 20%, Medium 60%, High 20%
+    patient_model.cpt(cost)[{'Treatment': 1}] = [0.40, 0.50, 0.10]  # RAI: Low 40%, Medium 50%, High 10%
+    patient_model.cpt(cost)[{'Treatment': 0}] = [0.20, 0.60, 0.20]  # ATD: Low 20%, Medium 60%, High 20%
 
     return patient_model

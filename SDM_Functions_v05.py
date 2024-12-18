@@ -123,7 +123,6 @@ def update_decision_node_options(model1, model2, decision_node_name):
                 for idx, option in enumerate(model1_options):
                     model1.cpt(child)[{decision_node_name: option}] = original_cpts[child][idx]
 
-        # Refresh child nodes after re-adding the decision node
         children_of_decision_node = [child for child in model1.children(model1_decision_node_id)]
         
         updated_model1_options = model1.variable(decision_node_name).labels()
@@ -198,10 +197,10 @@ def fill_model1_cpts_with_noisy_data(model1, model2, selected_node_name, noise_f
         print(f"Model2 CPT shape: {model2_cpt.shape}")
 
         min_shape = min(model1_cpt.shape, model2_cpt.shape)
-        noisy_cpt = add_noise_to_cpt(np.array(model2_cpt[:min_shape].tolist()), noise_factor)
+        noisy_cpt = add_noise_to_cpt_dirichlet(np.array(model2_cpt[:min_shape].tolist()), noise_factor)
     else:
-        # If the shapes match, we can proceed with the noisy transfer
-        noisy_cpt = add_noise_to_cpt(np.array(model2_cpt.tolist()), noise_factor)
+       
+        noisy_cpt = add_noise_to_cpt_dirichlet(np.array(model2_cpt.tolist()), noise_factor)
 
     model1.cpt(model1_node_id)[:] = noisy_cpt
 
@@ -209,58 +208,88 @@ def fill_model1_cpts_with_noisy_data(model1, model2, selected_node_name, noise_f
 
 def calculate_marginal_cpt_dynamic_with_noise(source_model, target_node, relevant_parents=None, noise_factor=0.0):
     """
-    This function calculates the marginal CPT for the given chance node in the source model.
+    Calculates the marginal CPT for the given chance node in the source model, retaining only relevant parents.
     """
-    target_node_id = source_model.idFromName(target_node)
-    all_parents = [source_model.variable(parent).name() for parent in source_model.parents(target_node_id)]
-    print(f"Parents of '{target_node}' in source_model: {all_parents}")
+    import numpy as np
 
-    if relevant_parents is None:
-        relevant_parents = all_parents
-    elif isinstance(relevant_parents, str):
-        relevant_parents = [relevant_parents]
+    target_node_id = source_model.idFromName(target_node)
 
     full_cpt = np.array(source_model.cpt(target_node_id).tolist())
+    print(f"Full CPT array:\n{full_cpt}")
     print(f"Full CPT shape: {full_cpt.shape}")
 
-    retained_axes = [all_parents.index(parent) for parent in relevant_parents] + [len(all_parents)]
-    marginal_axes = [i for i in range(len(full_cpt.shape)) if i not in retained_axes]
+    parent_ids = source_model.parents(target_node_id)
+    parent_names = [source_model.variable(pid).name() for pid in parent_ids]
+    parent_labels = {name: len(source_model.variable(pid).labels()) for name, pid in zip(parent_names, parent_ids)}
 
-    print(f"Retained Axes: {retained_axes}")
-    print(f"Marginalizing over axes: {marginal_axes}")
+    if relevant_parents is None:
+        relevant_parents = parent_names   
+    elif isinstance(relevant_parents, str):
+        relevant_parents = [relevant_parents]
+    relevant_parents = [parent for parent in relevant_parents if parent in parent_names]
 
-    marginalized_cpt = full_cpt.sum(axis=tuple(marginal_axes)) if marginal_axes else full_cpt
-    print(f"Marginalized CPT shape (before alignment): {marginalized_cpt.shape}")
+    print(f"Relevant Parents (aligned): {relevant_parents}")
 
-    expected_shape = [
-        len(source_model.variable(source_model.idFromName(parent)).labels())
-        for parent in relevant_parents
-    ] + [len(source_model.variable(target_node_id).labels())]
-    print(f"Expected CPT shape: {expected_shape}")
+    if set(relevant_parents) == set(parent_names):
+        print("All parents match relevant parents. Returning the full CPT directly.")
+        return full_cpt
 
-    current_shape = list(marginalized_cpt.shape)
-    for i, (current_dim, expected_dim) in enumerate(zip(current_shape, expected_shape)):
-        if current_dim < expected_dim:
-            pad_width = [(0, 0)] * len(current_shape)
-            pad_width[i] = (0, expected_dim - current_dim)
-            marginalized_cpt = np.pad(
-                marginalized_cpt, pad_width=pad_width, mode='constant', constant_values=0
-            )
-    print(f"Aligned Marginalized CPT shape: {marginalized_cpt.shape}")
+    parent_to_axis = {}
+    unused_parents = set(parent_names)   
+    for axis, dim in enumerate(full_cpt.shape[:-1]):   
+        found = False
+        for parent in unused_parents:
+            if parent_labels[parent] == dim:
+                parent_to_axis[parent] = axis
+                unused_parents.remove(parent)
+                found = True
+                break
+        if not found:
+            print(f"Warning: Unable to match axis {axis} (dimension {dim}) to a parent.")
+
+    print(f"Parent Nodes and Labels: {parent_labels}")
+    print(f"Parent-to-Axis Mapping: {parent_to_axis}")
+
+    irrelevant_parents = [parent for parent in parent_names if parent not in relevant_parents]
+    marginalized_axes = [parent_to_axis[parent] for parent in irrelevant_parents]
+    print(f"Irrelevant Parents: {irrelevant_parents}")
+    print(f"Marginalizing over Axes: {marginalized_axes}")
+
+    marginalized_cpt = full_cpt.sum(axis=tuple(marginalized_axes), keepdims=False)
+    print(f"Marginalized CPT (before alignment): {marginalized_cpt}")
+
+    if len(relevant_parents) == 1:
+        relevant_parent = relevant_parents[0]
+        expected_shape = [
+            len(source_model.variable(source_model.idFromName(relevant_parent)).labels()),
+            len(source_model.variable(target_node_id).labels()),
+        ]
+        print(f"Expected CPT shape (single relevant parent): {expected_shape}")
+        reshaped_cpt = marginalized_cpt.reshape(*expected_shape)
+    else:
+        expected_shape = [
+            len(source_model.variable(source_model.idFromName(parent)).labels())
+            for parent in relevant_parents
+        ] + [len(source_model.variable(target_node_id).labels())]
+        print(f"Expected CPT shape (multiple relevant parents): {expected_shape}")
+        reshaped_cpt = marginalized_cpt.reshape(*expected_shape)
+
+    print(f"Reshaped CPT:\n{reshaped_cpt}")
 
     try:
-        sums = marginalized_cpt.sum(axis=-1, keepdims=True)
-        sums[sums == 0] = 1e-10  # Avoid division by zero
-        normalized_cpt = marginalized_cpt / sums
-        normalized_cpt = np.nan_to_num(normalized_cpt, nan=0.0, posinf=0.0, neginf=0.0)
+        sums = reshaped_cpt.sum(axis=-1, keepdims=True)
+        sums[sums == 0] = 1e-10   
+        normalized_cpt = reshaped_cpt / sums
     except Exception as e:
         print(f"Normalization error: {e}")
-        normalized_cpt = np.nan_to_num(marginalized_cpt, nan=0.0, posinf=0.0, neginf=0.0)
+        normalized_cpt = reshaped_cpt
+
+    print(f"Normalized CPT:\n{normalized_cpt}")
 
     if noise_factor > 0:
-        normalized_cpt = add_noise_to_cpt(normalized_cpt, noise_factor=noise_factor)
+        normalized_cpt = add_noise_to_cpt_dirichlet(normalized_cpt, noise_factor=noise_factor)
+        print(f"CPT after adding noise:\n{normalized_cpt}")
 
-    print(f"Final Normalized CPT:\n{normalized_cpt}")
     return normalized_cpt
 
 
@@ -268,17 +297,33 @@ def add_marginal_cpt(patient_model, target_node, marginal_cpt, parent_states=Non
     """
     It transfers the given marginal CPT to a node in the patient model.
     """
-    if parent_states:
-        patient_model.cpt(target_node)[parent_states] = marginal_cpt
-    else:
-        patient_model.cpt(target_node)[:] = marginal_cpt
-   
+    if patient_model.isDecisionNode(patient_model.idFromName(target_node)):
+        print(f"Cannot assign CPT to decision node '{target_node}'. Skipping.")
+        return
+
+    try:
+        if parent_states:
+            patient_model.cpt(target_node)[parent_states] = marginal_cpt
+        else:
+            patient_model.cpt(target_node)[:] = marginal_cpt
+    except Exception as e:
+        print(f"Error while assigning CPT to '{target_node}': {e}")
+
 
 def transfer_marginal_cpt_multiple_parents(patient_model, target_node, parent_nodes, marginal_cpt):
     import itertools
 
     if isinstance(parent_nodes, str):
         parent_nodes = [parent_nodes]
+
+    print(f"Target Node: {target_node}")
+    print(f"Parent Nodes: {parent_nodes}")
+    print(f"Marginal CPT Shape: {marginal_cpt.shape}")
+
+    if not parent_nodes:
+        print(f"No parents for target node '{target_node}'. Directly transferring marginal CPT.")
+        add_marginal_cpt(patient_model, target_node, marginal_cpt)
+        return patient_model
 
     parent_states_dict = {
         parent: patient_model.variable(patient_model.idFromName(parent)).labels()
@@ -298,10 +343,14 @@ def transfer_marginal_cpt_multiple_parents(patient_model, target_node, parent_no
                     marginal_cpt, pad_width, mode='constant', constant_values=0
                 )
 
+    print(f"Parent States Dict: {parent_states_dict}")
+
     cpt_parent_order = list(parent_states_dict.keys())
 
     reorder_indices = [cpt_parent_order.index(parent) for parent in parent_nodes]
-    reorder_indices += [len(parent_nodes)]  
+    reorder_indices += [len(parent_nodes)]  # Add the target node's axis
+
+    print(f"Reorder Indices: {reorder_indices}")
 
     if len(reorder_indices) != len(marginal_cpt.shape):
         raise ValueError(
@@ -317,6 +366,7 @@ def transfer_marginal_cpt_multiple_parents(patient_model, target_node, parent_no
             f"Marginal CPT Shape: {marginal_cpt.shape}. Error: {e}"
         )
 
+    print(f"Marginal CPT Reordered Shape: {marginal_cpt_reordered.shape}")
 
     state_combinations = list(itertools.product(*parent_states_dict.values()))
 
@@ -325,19 +375,15 @@ def transfer_marginal_cpt_multiple_parents(patient_model, target_node, parent_no
         indices = tuple(parent_states_dict[parent].index(state) for parent, state in parent_states.items())
 
         prob = marginal_cpt_reordered[indices]
-
         prob = np.nan_to_num(prob, nan=0.0, posinf=0.0, neginf=0.0)
 
         add_marginal_cpt(patient_model, target_node, prob, parent_states)
 
     return patient_model
 
-
-
-
 def randomly_add_one_parent(model1, model2, node_name):
     """
-    This function randomly adds one given chance node from model2 from model1.
+    This function randomly adds one given chance node from model2 to model1.
     """
     print(f"\n--- Adding random parent and arc for '{node_name}' ---")
     
@@ -350,6 +396,10 @@ def randomly_add_one_parent(model1, model2, node_name):
 
     model2_parents = [model2.variable(parent).name() for parent in model2.parents(node_id_model2)]
     model1_parents = [model1.variable(parent).name() for parent in model1.parents(node_id_model1)]
+
+    if set(model2_parents) == set(model1_parents):
+        print(f"Node '{node_name}' already exists in model1 with matching parents. No action taken.")
+        return model1, None
 
     missing_parents = [parent for parent in model2_parents if parent not in model1_parents]
 
@@ -372,6 +422,7 @@ def randomly_add_one_parent(model1, model2, node_name):
 
     return model1, selected_parent
 
+
    
 def add_noise_to_cpt(cpt_array, noise_factor=0.1):  
     """
@@ -391,9 +442,72 @@ def add_noise_to_cpt(cpt_array, noise_factor=0.1):
     return normalized_cpt
 
 
+def generate_dirichlet_noise(row, noise_factor=0.0, verbose=False):
+    """
+    It generates noisy probabilities using Beta for binary nodes and Dirichlet for multinomial nodes.
+    """
+    if noise_factor <= 0:
+        raise ValueError("noise_factor must be a positive value.")
+
+    row = np.array(row)   
+    num_states = len(row)
+
+    if verbose:
+        print(f"Original row: {row}, Noise factor: {noise_factor}, Num states: {num_states}")
+
+    if num_states == 2:
+        
+        a = row[0] * noise_factor + 1e-6   
+        b = row[1] * noise_factor + 1e-6  
+        noisy_value = np.random.beta(a, b)
+        noisy_row = [noisy_value, 1 - noisy_value]
+
+        if verbose:
+            print(f"Beta distribution parameters: a={a}, b={b}, Noisy row: {noisy_row}")
+    else:
+        
+        dirichlet_params = row * noise_factor + 1e-6   
+        noisy_row = np.random.dirichlet(dirichlet_params)
+
+        if verbose:
+            print(f"Dirichlet parameters: {dirichlet_params}, Noisy row: {noisy_row}")
+
+    noisy_row = np.clip(noisy_row, 1e-6, 1)
+    noisy_row = noisy_row / np.sum(noisy_row)
+
+    if verbose:
+        print(f"Normalized noisy row: {noisy_row}")
+
+    return noisy_row
+
+
+def add_noise_to_cpt_dirichlet(cpt, noise_factor=0.0, verbose=False):
+    """
+    This function adds noise to a multi-dimensional CPT using Dirichlet or Beta distributions.
+
+    """
+    original_shape = cpt.shape
+    reshaped_cpt = cpt.reshape(-1, cpt.shape[-1])   
+    noisy_cpt = np.zeros_like(reshaped_cpt)
+
+    if verbose:
+        print(f"Original CPT shape: {original_shape}")
+        print(f"Reshaped CPT for processing: {reshaped_cpt.shape}")
+
+    for i, row in enumerate(reshaped_cpt):
+        noisy_cpt[i] = generate_dirichlet_noise(row, noise_factor, verbose=verbose)
+
+    noisy_cpt = noisy_cpt.reshape(original_shape)
+
+    if verbose:
+        print(f"Noisy CPT shape: {noisy_cpt.shape}")
+
+    return noisy_cpt
+    
 def add_only_node_to_model1(model1, model2, node_name):
     """
     This function adds a node from model2 to model1 without transferring its parents or arcs.
+
     """
     if model1.exists(node_name):
         print(f"Node '{node_name}' already exists in model1.")
@@ -415,7 +529,7 @@ def add_only_node_to_model1(model1, model2, node_name):
         else:
             print(f"States for '{node_name}' already match between model1 and model2. No action taken.")
         
-        return model1, node_name  
+        return model1, False  # Node already exists
 
     if not model2.exists(node_name):
         print(f"Node '{node_name}' does not exist in model2.")
@@ -426,23 +540,36 @@ def add_only_node_to_model1(model1, model2, node_name):
     if not model2.isChanceNode(node_id_model2):
         print(f"Node '{node_name}' is not a chance node in model2.")
         return model1, None
-        
+
+    # Add the node to model1
     node_info = model2.variable(node_id_model2)
     model1.add(node_info)
     print(f"Node '{node_name}' added to model1 (without parents or arcs).")
 
-    return model1, node_name
+    return model1, True  # Node was newly added
 
 
-   
-def add_noise_to_increments(parameters, mu=0, sigma=5):
+def add_noise_to_increments(parameters, noise_factor=0.1):
     """
-    This function adds noise to increment values in parameter settings.
-    """      
+    Adds noise to increment values using the Dirichlet distribution.
+    Parameters:
+        parameters: np.array containing node names, weights, and increments.
+        noise_factor: controls the variability of the noise (lower = less noise).
+    Returns:
+        Updated parameters with noisy increments.
+    """
     noisy_parameters = parameters.copy()
-    noise = np.random.normal(mu, sigma, size=noisy_parameters.shape[0])
-    noisy_parameters[:, 2] = noisy_parameters[:, 2].astype(float) + noise
+
+    for row in noisy_parameters:
+        original_increment = float(row[2])
+        alpha = [original_increment * noise_factor] * len(noisy_parameters)   
+        noisy_increment = np.random.dirichlet(alpha, size=1).flatten() * sum([float(r[2]) for r in noisy_parameters])
+        
+        row[2] = noisy_increment[0] if noisy_increment[0] > 0 else 0.0  # Ensure no negative values
+
     return noisy_parameters
+
+
 
 def delete_unmatched_arcs(model1, model2):
     """
@@ -579,7 +706,6 @@ def add_cpt_from_pool(patient_model, selected_cpt_Lifelong_Thyroid_Replacement, 
     patient_model.cpt('Cost')[{'Treatment': 'Surgery'}] = selected_cpt_Cost
 
 
-import itertools
 
 def add_equal_cpts_and_transfer(model, decision_node_name, new_state_name):
     """
@@ -610,11 +736,11 @@ def add_equal_cpts_and_transfer(model, decision_node_name, new_state_name):
             print(f"Error updating CPT for child '{child_name}': {e}")
 
 
-
-
-
 def transfer_parent_node_parameter(model1_params, model2_params, parent_node_name):
+    """
+    The function transfers or updates a parent node's parameters from model2 to model1, and renormalizes the weights in model1.
 
+    """
     row_to_transfer = None
     for row in model2_params:
         if row[0] == parent_node_name:
@@ -624,16 +750,33 @@ def transfer_parent_node_parameter(model1_params, model2_params, parent_node_nam
     if row_to_transfer is None:
         raise ValueError(f"Parent node '{parent_node_name}' not found in model2 parameters.")
 
+    updated_model1_params = []
+    replaced = False
     for row in model1_params:
         if row[0] == parent_node_name:
-            print(f"Parent node '{parent_node_name}' already exists in the parameters.")
-            return model1_params  
+            updated_model1_params.append(row_to_transfer)
+            replaced = True
+            print(f"Parent node '{parent_node_name}' parameters updated.")
+            
+        else:
+            updated_model1_params.append(row)
+            
+    if not replaced:
+        updated_model1_params.append(row_to_transfer)
+        print(f"Parent node '{parent_node_name}' added to the parameters.")
+        
+    updated_model1_params = np.array(updated_model1_params)
 
-    updated_model1_params = np.vstack([model1_params, row_to_transfer])
+    weights = updated_model1_params[:, 1].astype(float)
+    normalized_weights = weights / weights.sum()
+    updated_model1_params[:, 1] = normalized_weights
+
+    print(f"Updated parameters after transferring or updating '{parent_node_name}':")
+    print(updated_model1_params)
 
     return updated_model1_params
 
-    
+
 def calculate_baseline_eu(model):
         limid_solver = gum.ShaferShenoyLIMIDInference(model)
         limid_solver.makeInference()
@@ -764,19 +907,16 @@ def chance_node_transfer(model1, model2, chance_node,noise_factor=0.0):
 
 def fill_missing_cpts(model1, model2, noise_factor=0.05):
     """
-    Identifies and fills missing or empty CPTs in model1 using CPTs from model2.
-    Adds noise to the CPTs during the transfer.
+    It identifies and fills missing or empty CPTs in model1 using CPTs from model2.  
     """
     print("Checking for missing CPTs in model1...")
 
     for node_id in model1.nodes():
-        # Skip decision and utility nodes
         if model1.isDecisionNode(node_id) or model1.isUtilityNode(node_id):
             continue
 
         node_name = model1.variable(node_id).name()
 
-        # Check if the CPT is empty (zero or uninitialized)
         cpt = model1.cpt(node_id)
         if cpt.sum() == 0 or np.isnan(cpt.sum()):
             if model2.exists(node_name):                
@@ -795,91 +935,102 @@ def add_arc_to_utility_node(model,preference):
     decision_node_id = next((node for node in model.nodes() if model.isDecisionNode(node)), None)
     decision_node_name = model.variable(decision_node_id).name()
 
-
-    model.addArc(preference,utility_node_name)
-    model.addArc(decision_node_name,preference)
+    if not model.existsArc(model.idFromName(preference), utility_node_id):  
+        model.addArc(preference,utility_node_name)
+    if not model.existsArc(decision_node_id, model.idFromName(preference)):       
+        model.addArc(decision_node_name, preference)        
     return model
 
 
-def add_preference_nodes_iteratively(model1, model2,parameters1, parameters2):
+   
+def normalize_parameters(parameters):
+    """
+    The function normalize the weights in the parameters to ensure they sum to 1.
+    """
+    total_weight = sum(float(row[1]) for row in parameters)
+    if total_weight == 0:
+        raise ValueError("Total weight is zero, cannot normalize parameters.")
+    normalized_parameters = [
+        [row[0], str(float(row[1]) / total_weight), row[2]] for row in parameters
+    ]
+    return np.array(normalized_parameters)
 
-    model1_utility_node = next(node for node in model1.names() if model1.isUtilityNode(node))
-    model2_utility_node = next(node for node in model2.names() if model2.isUtilityNode(node))
+
+
+
+def adjust_weights_based_on_emphasis(parameters, transferred_node, emphasize_type):
+    """
+    The function adjusts the weight of the transferred node based on the emphasize_type and normalizes all weights.
+    """
+ 
+    if emphasize_type == "over":
+        scaling_factor = 3.0
+    elif emphasize_type == "equal":
+        scaling_factor = 1.0
+    elif emphasize_type == "lower":
+        scaling_factor = 0.5
+    else:
+        raise ValueError(f"Invalid emphasize_type: {emphasize_type}")
     
-    model1_utility_parents = set(model1.parents(model1.idFromName(model1_utility_node)))
-    model2_utility_parents = set(model2.parents(model2.idFromName(model2_utility_node)))
-
-    preference_nodes = model2_utility_parents -  model1_utility_parents
-    preference_nodes_names = [model2.variable(node).name() for node in preference_nodes]
-
-    for node_name in preference_nodes_names:
-        model1, _ = preference_transfer(model1, model2, parameters1, parameters2, node_name)
-
-    return model1
+    updated_parameters = parameters.copy()
+    total_weight = 0.0
     
-def preference_transferORJ(model1, model2, parameters1, parameters2, parent_node_name):
-    utility_node_name_model1 = next(
-        node for node in model1.names() if model1.isUtilityNode(node)
-    )
-    utility_node_name_model2 = next(
-        node for node in model2.names() if model2.isUtilityNode(node)
-    )
+    for row in updated_parameters:
+        if row[0] == transferred_node:
+            row[1] = float(row[1]) * scaling_factor 
+        total_weight += float(row[1])  
+    
+    for row in updated_parameters:
+        row[1] = float(row[1]) / total_weight
+    
+    return updated_parameters
+    
+
+def preference_transfer(model1, model2, parameters1, parameters2, parent_node_name):
+    """
+    Transfers a preference node and updates weights accordingly.
+    """
     decision_node_name_model1 = next(
         node for node in model1.names() if model1.isDecisionNode(node)
     )
     decision_node_name_model2 = next(
         node for node in model2.names() if model2.isDecisionNode(node)
     )
-    model1,_ = add_only_node_to_model1(model1, model2, parent_node_name)
-    updated_parameters1 = transfer_parent_node_parameter(
-        parameters1, parameters2, parent_node_name
+
+    utility_node_name_model1 = next(
+        node for node in model1.names() if model1.isUtilityNode(node)
     )
-    
-    noisy_parameters1 = add_noise_to_increments(updated_parameters1)
-    model1= add_arc_to_utility_node(model1, parent_node_name)
-    marginal_cpt = calculate_marginal_cpt_dynamic_with_noise(model2, parent_node_name, decision_node_name_model2)
-    model1= transfer_marginal_cpt_multiple_parents(model1, parent_node_name, decision_node_name_model1, marginal_cpt)
 
+    model1, newly_added = add_only_node_to_model1(model1, model2, parent_node_name)
 
-    model1 = fill_missing_cpts_with_noise(model1, model2)
-    calculate_utility_values(model1, utility_node_name_model1, noisy_parameters1)
-    
-    return model1, noisy_parameters1
-
-def preference_transfer(model1, model2, parameters1, parameters2, parent_node_name):
-   
-    if parent_node_name in model1.names():
-        print(f"Node '{parent_node_name}' already exists in model1.")
-        if parent_node_name in model2.names():
-            if model1.variable(model1.idFromName(parent_node_name)).labels() == model2.variable(model2.idFromName(parent_node_name)).labels():
-                print(f"States for '{parent_node_name}' already match between model1 and model2. No action taken.")
-                return model1, parameters1
-        print(f"Node '{parent_node_name}' found in model1 but not in model2.")
-        return model1, parameters1
-
-
-    decision_node_name_model1 = next(
-    node for node in model1.names() if model1.isDecisionNode(node)
-    )
-    decision_node_name_model2 = next(
-        node for node in model2.names() if model2.isDecisionNode(node)
-    )
-    
-    utility_node_name_model1 = next(node for node in model1.names() if model1.isUtilityNode(node))
-    model1, _ = add_only_node_to_model1(model1, model2, parent_node_name)
     updated_parameters1 = transfer_parent_node_parameter(parameters1, parameters2, parent_node_name)
 
-    noisy_parameters1 = add_noise_to_increments(updated_parameters1)
+    noisy_parameters1 = normalize_parameters(updated_parameters1)
+
     model1 = add_arc_to_utility_node(model1, parent_node_name)
 
-    marginal_cpt = calculate_marginal_cpt_dynamic_with_noise(model2, parent_node_name, decision_node_name_model2)
-    model1 = transfer_marginal_cpt_multiple_parents(model1, parent_node_name, decision_node_name_model1, marginal_cpt)
-    model1 = fill_missing_cpts_with_noise(model1, model2)
-    calculate_utility_values(model1, utility_node_name_model1, noisy_parameters1)
+    if newly_added:
+        marginal_cpt = calculate_marginal_cpt_dynamic_with_noise(model2, parent_node_name, decision_node_name_model2)
+        model1 = transfer_marginal_cpt_multiple_parents(model1, parent_node_name, decision_node_name_model1, marginal_cpt)
+  
+    utility_parents = [
+        model1.variable(parent).name()
+        for parent in model1.parents(model1.idFromName(utility_node_name_model1))
+    ]
+
+    for parent in utility_parents:
+        if parent not in noisy_parameters1[:, 0]:
+            print(f"Adding missing parameters for '{parent}' with default values.")
+            noisy_parameters1 = np.vstack([
+                noisy_parameters1,
+                [parent, 0.1, 300]  
+            ])
+
+    noisy_parameters1 = normalize_parameters(noisy_parameters1)
+
 
     return model1, noisy_parameters1
-
-
+    
 def add_all_preference_nodes(model1, model2, parameters1, parameters2, log_file=None):
 
     log = []
@@ -992,6 +1143,15 @@ def fill_missing_cpts_with_noise(model1, model2, noise_factor=0.1):
 
 
 
+
+
+
+
+
+###############################################################################################################################################################
+############################################################ FOR SIMULATION'S DATASET #########################################################################
+###############################################################################################################################################################
+
 def iterative_chance_node_transfer_with_logging(model1, model2, chance_node, noise_factor=0.1, log_file=None):
     """
     This function is for simulation data, it logs the operations and utility changes at each step.
@@ -1025,11 +1185,11 @@ def iterative_chance_node_transfer_with_logging(model1, model2, chance_node, noi
          
             model1.erase(node_id_model1)
             
-             new_node = gum.LabelizedVariable(chance_node, f"{chance_node} (Synchronized)", len(states_model2))
+            new_node = gum.LabelizedVariable(chance_node, f"{chance_node} (Synchronized)", len(states_model2))
             for i, label in enumerate(states_model2):
-                new_node.changeLabel(i, label)  # Assign each label explicitly
+                new_node.changeLabel(i, label)   
             
-             model1.addChanceNode(new_node)
+            model1.addChanceNode(new_node)
             new_node_id = model1.idFromName(chance_node)
             
             print(f"Node '{chance_node}' states synchronized to: {states_model2}")
@@ -1046,8 +1206,9 @@ def iterative_chance_node_transfer_with_logging(model1, model2, chance_node, noi
                 model1.cpt(chance_node)[:] = marginal_cpt
             else:
                 model1.cpt(chance_node).fillWith(1.0 / len(states_model2))  # Uniform distribution if no parents
-
-        marginal_cpt = calculate_marginal_cpt_dynamic_with_noise(model2, chance_node, [], noise_factor=noise_factor)
+        model1, connected_node = randomly_add_one_parent(model1, model2, chance_node)
+        print(f"connected node'{connected_node}'")
+        marginal_cpt = calculate_marginal_cpt_dynamic_with_noise(model2, chance_node, connected_node, noise_factor=noise_factor)
         model1.cpt(chance_node)[:] = marginal_cpt
 
         state_utilities, max_eu, max_state = show_decision_utilities3(model1)
@@ -1127,125 +1288,11 @@ def iterative_chance_node_transfer_with_logging(model1, model2, chance_node, noi
         log_df.to_excel(log_file, index=False)
 
     return model1, log
-
-
-
-def transfer_missing_arcs_and_update_cpts(model1, model2, chance_node, noise_factor=0.1):
-    """
-    This function transfer the arc between the given chance node and its children, if needed.
-    """
-    chance_node_id_model2 = model2.idFromName(chance_node)
-
-    children_in_model2 = model2.children(chance_node_id_model2)
-    children_names_in_model2 = [model2.variable(child).name() for child in children_in_model2]
-
-    for child_name in children_names_in_model2:
-        if child_name not in model1.names():
-            continue
-
-        if model1.isUtilityNode(model1.idFromName(child_name)):
-            print(f"Skipping utility node '{child_name}' during arc transfer.")
-            continue
-
-        child_node_id_model1 = model1.idFromName(child_name)
-
-        if not model1.existsArc(model1.idFromName(chance_node), child_node_id_model1):
-            try:
-                model1.addArc(model1.idFromName(chance_node), child_node_id_model1)
-                print(f"Arc added: {chance_node} -> {child_name}")
-
-                relevant_parents = [
-                    model1.variable(parent).name()
-                    for parent in model1.parents(child_node_id_model1)
-                    if model1.exists(model1.variable(parent).name())
-                ]
-
-                marginal_cpt = calculate_marginal_cpt_dynamic_with_noise(
-                    model2, child_name, relevant_parents, noise_factor=noise_factor
-                )
-
-                model1 = transfer_marginal_cpt_multiple_parents(
-                    model1, child_name, relevant_parents, marginal_cpt
-                )
-                print(f"CPT updated for '{child_name}' after adding arc '{chance_node} -> {child_name}'")
-            except Exception as e:
-                print(f"Error updating CPT for '{child_name}': {e}")
-
-    return model1
-
-
-def iterative_chance_node_transfer_all(model1, model2, noise_factor=0.1, log_file=None, function_type=None):
-    """
-    This function is for simulation dataset, it transfers all chance nodes from model2 to model1, and logs each step in an Excel file.
-    """
-    import pandas as pd
-
-    combined_log = pd.DataFrame()
-
-    all_nodes = model2.names()
-
-    chance_nodes = [
-        node_name for node_name in all_nodes
-        if model2.isChanceNode(model2.idFromName(node_name))
-    ]
-
-    print(f"Chance nodes in model2: {chance_nodes}")
-
-    for chance_node in chance_nodes:
-        print(f"Processing chance node: {chance_node}")
-
-        try:
-            model1, log = iterative_chance_node_transfer_with_logging(
-                model1, model2, chance_node, noise_factor=noise_factor, log_file=None
-            )
-
-            for entry in log:
-                entry["Function Type"] = function_type
-
-            combined_log = pd.concat([combined_log, pd.DataFrame(log)], ignore_index=True)
-
-        except Exception as e:
-            print(f"Error processing node '{chance_node}': {e}")
-
-    delete_unmatched_arcs(model2,model1)
-    if log_file:
-        combined_log.to_excel(log_file, index=False)
-
-    return model1, combined_log
-
-
-def has_empty_cpts(model):
-
-    for node in model.names():
-        if model.isChanceNode(node):
-            cpt = model.cpt(node)
-            if cpt.max() == 0 and cpt.min() == 0:
-                return True
-    return False
-
-def print_all_cpts(model):
-    for node_name in model.names():
-        if model.isChanceNode(node_name):
-            print(f"CPT of {node_name}:")
-            print(model.cpt(node_name))
-            print("\n-------------------------------\n")
-
-
-
-def print_all_utilitiesX(model):
-    for node_name in model.names():
-        if model.isUtilityNode(node_name):
-            print(f"Utility of {node_name}:")
-            print(model.utility(node_name))
-            print("\n----------------------\n")
-
-
-
-
+    
 def calculate_expected_utility(model):
     state_utilities, max_expected_utility, max_utility_state = show_decision_utilities3(model)
     return max_expected_utility, max_utility_state
-
+    
 def transfer_chance_nodes_with_filter(model1, model2, transfer_type, transfer_value, noise_factor=0.0, log_file=None):
     """
     This function transfer chance nodes from model2 to model1 based on 
@@ -1291,21 +1338,66 @@ def transfer_chance_nodes_with_filter(model1, model2, transfer_type, transfer_va
                 "Initial_State_Doctor": initial_state_model2,
                 "Final_EU_Patient": final_eu_model1,
                 "Final_State_Patient": final_state_model1,
-                "Difference_EU_Patient": final_eu_model1 - initial_eu_model1,
             }
             combined_log.append(log_entry)
 
             initial_eu_model1, initial_state_model1 = final_eu_model1, final_state_model1
-
+        
         except Exception as e:
             print(f"Error transferring node '{chance_node}': {e}")
+    
+    delete_unmatched_arcs(model2, model1)       
 
     return model1, pd.DataFrame(combined_log)
 
-
-def add_preference_nodes_with_percentage(model1, model2, parameters1, parameters2, percentage, log_file=None):
+def iterative_chance_node_transfer_all(model1, model2, noise_factor=0.1, log_file=None, function_type=None):
     """
-    This function transfers a percentage of utility node parents from model2 to model1.
+    This function is for simulation dataset, it transfers all chance nodes from model2 to model1, and logs each step in an Excel file.
+    """
+    import pandas as pd
+
+    combined_log = pd.DataFrame()
+
+    all_nodes = model2.names()
+
+    chance_nodes = [
+        node_name for node_name in all_nodes
+        if model2.isChanceNode(model2.idFromName(node_name))
+    ]
+
+    print(f"Chance nodes in model2: {chance_nodes}")
+
+    for chance_node in chance_nodes:
+        print(f"Processing chance node: {chance_node}")
+
+        try:
+            model1, log = iterative_chance_node_transfer_with_logging(
+                model1, model2, chance_node, noise_factor=noise_factor, log_file=None
+            )
+
+            for entry in log:
+                entry["Function Type"] = function_type
+
+            combined_log = pd.concat([combined_log, pd.DataFrame(log)], ignore_index=True)
+
+        except Exception as e:
+            print(f"Error processing node '{chance_node}': {e}")
+
+   
+    delete_unmatched_arcs(model2,model1)
+    if log_file:
+        combined_log.to_excel(log_file, index=False)
+
+    return model1, combined_log
+    
+def add_preference_nodes_with_percentage(
+    model1, model2, parameters1, parameters2, percentage, 
+    preference_transfer_type="random", emphasize_type="equal", 
+    noise_preference=0.0, log_file=None
+):
+    """
+    Transfers a percentage of utility node parents from model2 to model1,
+    adjusts weights based on emphasize_type, and optionally adds noise to preferences.
     """
     import pandas as pd
     import random
@@ -1319,9 +1411,20 @@ def add_preference_nodes_with_percentage(model1, model2, parameters1, parameters
     ]
 
     print(f"Utility node parents in model2: {utility_parents_model2}")
-    print("Nodes in model2:", model2.names()) 
+
     num_nodes_to_transfer = max(1, int(len(utility_parents_model2) * percentage / 100))
-    parents_to_transfer = random.sample(utility_parents_model2, num_nodes_to_transfer)
+
+    if preference_transfer_type == "random":
+        parents_to_transfer = random.sample(utility_parents_model2, num_nodes_to_transfer)
+    elif preference_transfer_type == "weighted":
+        parents_to_transfer = sorted(
+            utility_parents_model2,
+            key=lambda x: next((float(row[1]) for row in parameters2 if row[0] == x), 0),
+            reverse=True
+        )[:num_nodes_to_transfer]
+    else:
+        raise ValueError("Invalid preference_transfer_type. Use 'random' or 'weighted'.")
+
     print(f"Transferring {num_nodes_to_transfer} nodes: {parents_to_transfer}")
 
     initial_eu_model1, initial_state_model1 = calculate_expected_utility(model1)
@@ -1338,7 +1441,11 @@ def add_preference_nodes_with_percentage(model1, model2, parameters1, parameters
             model1, updated_parameters = preference_transfer(
                 model1, model2, current_parameters, parameters2, parent_node_name
             )
-            current_parameters = updated_parameters 
+ 
+            updated_parameters = adjust_weights_based_on_emphasis(updated_parameters, parent_node_name, emphasize_type)        
+            updated_parameters = add_noise_to_increments(updated_parameters, noise_preference)
+
+            current_parameters = updated_parameters   
             final_eu_model1, final_state_model1 = calculate_expected_utility(model1)
             log.append({
                 "Number_Transferred_Node": num_nodes_to_transfer,
@@ -1348,7 +1455,9 @@ def add_preference_nodes_with_percentage(model1, model2, parameters1, parameters
                 "Final_EU_Doctor": final_eu_model1,
                 "Final_State_Doctor": final_state_model1,
                 "Difference_EU_Doctor": final_eu_model1 - initial_eu_model1,
-                "Operation": "Preference Node Transfer"
+                "Operation": "Preference Node Transfer",
+                "Emphasize_Type": emphasize_type,  # Log emphasize type
+                "Noise_Preference": noise_preference  # Log noise preference
             })
 
             initial_eu_model1 = final_eu_model1
@@ -1363,8 +1472,34 @@ def add_preference_nodes_with_percentage(model1, model2, parameters1, parameters
 
     return model1, current_parameters, pd.DataFrame(log)
 
+###############################################################################################################################################################
+############################################################ GENERAL FUNCTIONS ################################################################################
+###############################################################################################################################################################
+
+def print_all_cpts(model):
+    for node_name in model.names():
+        if model.isChanceNode(node_name):
+            print(f"CPT of {node_name}:")
+            print(model.cpt(node_name))
+            print("\n-------------------------------\n")
 
 
 
+def print_all_utilitiesX(model):
+    for node_name in model.names():
+        if model.isUtilityNode(node_name):
+            print(f"Utility of {node_name}:")
+            print(model.utility(node_name))
+            print("\n----------------------\n")
+
+
+def has_empty_cpts(model):
+
+    for node in model.names():
+        if model.isChanceNode(node):
+            cpt = model.cpt(node)
+            if cpt.max() == 0 and cpt.min() == 0:
+                return True
+    return False
 
 
